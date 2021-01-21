@@ -1,0 +1,29 @@
+version: "3.3"
+
+services:
+    redis:
+        image: redis:6.0-rc1
+        ports:
+            - "6379:6379"
+        volumes:
+            - redis-data:/var/lib/redis
+        restart: always
+        networks:
+            - internal-network
+    go-chat:
+        build: ./Go-Chat
+        image: treiro/go-chat:0.1.0
+        hostname: go-chat
+        ports:
+            - 8080:8080
+        restart: always
+        networks:
+            - internal-network
+        environment: 
+            - REDIS_HOST=redis:6379
+            - EXT_PORT=9091
+            - NAME=chat2
+volumes:
+    redis-data: {}
+networks: 
+    internal-network: {}
