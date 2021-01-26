@@ -34,26 +34,37 @@ func init() {
 		log.Fatal("failed to connect to redis", err)
 	}
 	log.Println("connected to redis", redisHost)
-	startSubscriber()
+	// startSubscriber()
 }
-
-const channel = "chat"
-
-func startSubscriber() {
+func unsubcribe(ChannelName string) {
+	log.Println("remove old sub...")
+	if sub != nil {
+		err := sub.Unsubscribe(ChannelName)
+		if err != nil {
+			log.Println("failed to unsubscribe redis channel subscription:", err)
+		}
+	}
+}
+func startSubscriber(ChannelName string) {
 	/*
 		this goroutine exits when the application shuts down. When the pusub connection is closed,
 		the channel range loop terminates, hence terminating the goroutine
 	*/
 	go func() {
-		log.Println("starting subscriber...")
-		sub = client.Subscribe(channel)
+		log.Println("starting subscriber...", ChannelName)
+		sub = client.Subscribe(ChannelName)
 		messages := sub.Channel()
 		for message := range messages {
 			from := strings.Split(message.Payload, ":")[0]
 			//send to all websocket sessions/peers
-			for user, peer := range Peers {
+			for userinstance, peer := range Peers {
+				//user:time
+				user := strings.Split(userinstance, ":")[0]
 				if from != user { //don't recieve your own messages
-					peer.WriteMessage(websocket.TextMessage, []byte(message.Payload))
+					joined, _ := CheckUserInChannel(ChannelName, user)
+					if joined {
+						peer.WriteMessage(websocket.TextMessage, []byte(message.Payload))
+					}
 				}
 			}
 		}
@@ -61,14 +72,24 @@ func startSubscriber() {
 }
 
 // SendToChannel pusblishes on a redis pubsub channel
-func SendToChannel(msg string) {
+func SendToChannel(channel string, msg string) {
 	err := client.Publish(channel, msg).Err()
 	if err != nil {
 		log.Println("could not publish to channel", err)
 	}
 }
 
+const channels = "chat-channels"
 const users = "chat-users"
+
+// CheckUserInChannel checks whether the user exists in the SET of active chat users
+func CheckUserInChannel(channel string, user string) (bool, error) {
+	joined, err := client.SIsMember(channel, user).Result()
+	if err != nil {
+		return false, err
+	}
+	return joined, nil
+}
 
 // CheckUserExists checks whether the user exists in the SET of active chat users
 func CheckUserExists(user string) (bool, error) {
@@ -79,9 +100,36 @@ func CheckUserExists(user string) (bool, error) {
 	return usernameTaken, nil
 }
 
+// CheckChannelExists checks whether the user exists in the SET of active chat channels
+func CheckChannelExists(channel string) (bool, error) {
+	usernameTaken, err := client.SIsMember(channels, channel).Result()
+	if err != nil {
+		return false, err
+	}
+	return usernameTaken, nil
+}
+
+// CreateChannel creates a new channel in the SET of active chat channels
+func CreateChannel(channel string) error {
+	err := client.SAdd(channels, channel).Err()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 // CreateUser creates a new user in the SET of active chat users
 func CreateUser(user string) error {
 	err := client.SAdd(users, user).Err()
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+// UserJoinChannel SET users in group
+func UserJoinChannel(channel string, user string) error {
+	err := client.SAdd(channel, user).Err()
 	if err != nil {
 		return err
 	}
@@ -98,8 +146,18 @@ func RemoveUser(user string) {
 	log.Println("removed user from redis:", user)
 }
 
+// RemoveChannel removes a user from the SET of active chat channels
+func RemoveChannel(channel string) {
+	err := client.SRem(channels, channel).Err()
+	if err != nil {
+		log.Println("failed to remove user:", channel)
+		return
+	}
+	log.Println("removed user from redis:", channel)
+}
+
 // Cleanup is invoked when the app is shutdown - disconnects websocket peers, closes pusb-sub and redis client connection
-func Cleanup() {
+func Cleanup(channel string) {
 	for user, peer := range Peers {
 		client.SRem(users, user)
 		peer.Close()

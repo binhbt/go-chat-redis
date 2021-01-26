@@ -3,6 +3,7 @@ package chat
 import (
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -10,20 +11,25 @@ import (
 // Peers maps a chat user to the websocket connection (pointer)
 var Peers map[string]*websocket.Conn
 
+//Peer map for subcribe channel
+var Subs map[string]string
+
 func init() {
 	Peers = map[string]*websocket.Conn{}
+	Subs = map[string]string{}
 }
 
 // ChatSession represents a connected/active chat user
 type ChatSession struct {
-	user string
-	peer *websocket.Conn
+	user  string
+	group string
+	peer  *websocket.Conn
 }
 
 // NewChatSession returns a new ChatSession
-func NewChatSession(user string, peer *websocket.Conn) *ChatSession {
+func NewChatSession(user string, group string, peer *websocket.Conn) *ChatSession {
 
-	return &ChatSession{user: user, peer: peer}
+	return &ChatSession{user: user, group: group, peer: peer}
 }
 
 const usernameHasBeenTaken = "username %s is already taken. please retry with a different name"
@@ -32,9 +38,28 @@ const welcome = "Welcome %s!"
 const joined = "%s: has joined the chat!"
 const chat = "%s: %s"
 const left = "%s: has left the chat!"
+const peerkey = "%s:%d"
 
 // Start starts the chat by reading messages sent by the peer and broadcasting the to redis pub-sub channel
 func (s *ChatSession) Start() {
+	exist, err := CheckChannelExists(s.group)
+
+	if exist {
+		log.Println("Channel exist")
+	} else {
+		err := CreateChannel(s.group)
+		if err != nil {
+			log.Println("failed to add user to list of active chat users", s.user)
+			return
+		}
+	}
+	if _, ok := Subs[s.group]; ok {
+		log.Println("Has subcribed -> Ignore")
+	} else {
+		startSubscriber(s.group)
+		Subs[s.group] = "OK"
+	}
+
 	usernameTaken, err := CheckUserExists(s.user)
 
 	if err != nil {
@@ -45,23 +70,31 @@ func (s *ChatSession) Start() {
 	}
 
 	if usernameTaken {
-		msg := fmt.Sprintf(usernameHasBeenTaken, s.user)
-		s.peer.WriteMessage(websocket.TextMessage, []byte(msg))
-		s.peer.Close()
-		return
+		// msg := fmt.Sprintf(usernameHasBeenTaken, s.user)
+		// s.peer.WriteMessage(websocket.TextMessage, []byte(msg))
+		// s.peer.Close()
+		// return
+	} else {
+		err = CreateUser(s.user)
+		if err != nil {
+			log.Println("failed to add user to list of active chat users", s.user)
+			s.notifyPeer(retryMessage)
+			s.peer.Close()
+			return
+		}
 	}
-
-	err = CreateUser(s.user)
-	if err != nil {
-		log.Println("failed to add user to list of active chat users", s.user)
-		s.notifyPeer(retryMessage)
-		s.peer.Close()
-		return
+	t := time.Now().UnixNano()
+	key := fmt.Sprintf(peerkey, s.user, t)
+	//user:time
+	log.Println("peer key--", key)
+	Peers[key] = s.peer
+	ujoined, err := CheckUserInChannel(s.group, s.user)
+	if !ujoined {
+		UserJoinChannel(s.group, s.user)
 	}
-	Peers[s.user] = s.peer
 
 	s.notifyPeer(fmt.Sprintf(welcome, s.user))
-	SendToChannel(fmt.Sprintf(joined, s.user))
+	SendToChannel(s.group, fmt.Sprintf(joined, s.user))
 
 	/*
 		this go-routine will exit when:
@@ -80,7 +113,7 @@ func (s *ChatSession) Start() {
 				}
 				return
 			}
-			SendToChannel(fmt.Sprintf(chat, s.user, string(msg)))
+			SendToChannel(s.group, fmt.Sprintf(chat, s.user, string(msg)))
 		}
 	}()
 }
@@ -98,7 +131,7 @@ func (s *ChatSession) disconnect() {
 	RemoveUser(s.user)
 
 	//notify other users that this user has left
-	SendToChannel(fmt.Sprintf(left, s.user))
+	SendToChannel(s.group, fmt.Sprintf(left, s.user))
 
 	//close websocket
 	s.peer.Close()

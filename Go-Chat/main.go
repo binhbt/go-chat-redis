@@ -30,10 +30,10 @@ func init() {
 		log.Fatal("missing REDIS_HOST env var")
 	}
 
-	redisPassword = os.Getenv("REDIS_PASSWORD")
-	if redisPassword == "" {
-		log.Fatal("missing REDIS_PASSWORD env var")
-	}
+	// redisPassword = os.Getenv("REDIS_PASSWORD")
+	// if redisPassword == "" {
+	// 	log.Fatal("missing REDIS_PASSWORD env var")
+	// }
 }
 
 func main() {
@@ -58,20 +58,22 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	chat.Cleanup()
+	// chat.Cleanup()
 	server.Shutdown(ctx)
 
 	log.Println("chat app exited")
 }
 
 func websocketHandler(rw http.ResponseWriter, req *http.Request) {
-	user := strings.TrimPrefix(req.URL.Path, "/chat/")
+	usergroup := strings.TrimPrefix(req.URL.Path, "/chat/")
+	group := strings.Split(usergroup, "/")[0]
+	user := strings.Split(usergroup, "/")[1]
 
 	peer, err := upgrader.Upgrade(rw, req, nil)
 	if err != nil {
 		log.Fatal("websocket conn failed", err)
 	}
 
-	chatSession := chat.NewChatSession(user, peer)
+	chatSession := chat.NewChatSession(user, group, peer)
 	chatSession.Start()
 }
