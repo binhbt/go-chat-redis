@@ -1,6 +1,8 @@
 package chat
 
 import (
+	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -9,10 +11,19 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+//MessageData nessage data struct
+type MessageData struct {
+	From    string
+	Channel string
+	Content string
+	Type    string
+}
+
 var client *redis.Client
 var redisHost string
 var redisPassword string
-var sub *redis.PubSub
+
+// var sub *redis.PubSub
 
 func init() {
 
@@ -36,14 +47,13 @@ func init() {
 	log.Println("connected to redis", redisHost)
 	// startSubscriber()
 }
-func unsubcribe(ChannelName string) {
-	log.Println("remove old sub...")
-	if sub != nil {
-		err := sub.Unsubscribe(ChannelName)
-		if err != nil {
-			log.Println("failed to unsubscribe redis channel subscription:", err)
-		}
-	}
+func getChatMessage(payload string) MessageData {
+	log.Println("Message ...", payload)
+	var msg MessageData
+	json.Unmarshal([]byte(payload), &msg)
+	fmt.Printf("Message : %+v", msg)
+	fmt.Printf("From: %s, Message: %s", msg.From, msg.Channel)
+	return msg
 }
 func startSubscriber(ChannelName string) {
 	/*
@@ -52,17 +62,27 @@ func startSubscriber(ChannelName string) {
 	*/
 	go func() {
 		log.Println("starting subscriber...", ChannelName)
-		sub = client.Subscribe(ChannelName)
+		sub := client.Subscribe(ChannelName)
+		Subs[ChannelName] = sub
 		messages := sub.Channel()
 		for message := range messages {
-			from := strings.Split(message.Payload, ":")[0]
+			log.Println("Receive from...", ChannelName)
+
+			msg := getChatMessage(message.Payload)
+			from := msg.From
+			log.Println("From...", from)
+			// from := strings.Split(message.Payload, ":")[0]
 			//send to all websocket sessions/peers
 			for userinstance, peer := range Peers {
-				//user:time
-				user := strings.Split(userinstance, ":")[0]
+				//group:user:time
+				group := strings.Split(userinstance, ":")[0]
+				user := strings.Split(userinstance, ":")[1]
 				if from != user { //don't recieve your own messages
+					log.Println("User...", user)
 					joined, _ := CheckUserInChannel(ChannelName, user)
-					if joined {
+					log.Println("Check in channel...", ChannelName, joined)
+					//If don't check group it will send to all user group and you just open one connection
+					if joined && group == ChannelName {
 						peer.WriteMessage(websocket.TextMessage, []byte(message.Payload))
 					}
 				}
@@ -157,22 +177,24 @@ func RemoveChannel(channel string) {
 }
 
 // Cleanup is invoked when the app is shutdown - disconnects websocket peers, closes pusb-sub and redis client connection
-func Cleanup(channel string) {
+func Cleanup() {
 	for user, peer := range Peers {
 		client.SRem(users, user)
 		peer.Close()
 	}
 	log.Println("cleaned up users and sessions...")
-	err := sub.Unsubscribe(channel)
-	if err != nil {
-		log.Println("failed to unsubscribe redis channel subscription:", err)
-	}
-	err = sub.Close()
-	if err != nil {
-		log.Println("failed to close redis channel subscription:", err)
+	for channel, sub := range Subs {
+		err := sub.Unsubscribe(channel)
+		if err != nil {
+			log.Println("failed to unsubscribe redis channel subscription:", err)
+		}
+		err = sub.Close()
+		if err != nil {
+			log.Println("failed to close redis channel subscription:", err)
+		}
 	}
 
-	err = client.Close()
+	err := client.Close()
 	if err != nil {
 		log.Println("failed to close redis connection: ", err)
 		return

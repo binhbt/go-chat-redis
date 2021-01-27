@@ -58,7 +58,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// chat.Cleanup()
+	chat.Cleanup()
 	server.Shutdown(ctx)
 
 	log.Println("chat app exited")

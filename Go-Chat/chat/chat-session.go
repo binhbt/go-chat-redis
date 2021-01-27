@@ -1,22 +1,24 @@
 package chat
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"time"
 
+	"github.com/go-redis/redis"
 	"github.com/gorilla/websocket"
 )
 
 // Peers maps a chat user to the websocket connection (pointer)
 var Peers map[string]*websocket.Conn
 
-//Peer map for subcribe channel
-var Subs map[string]string
+//Subs map for subcribe channel
+var Subs map[string]*redis.PubSub
 
 func init() {
 	Peers = map[string]*websocket.Conn{}
-	Subs = map[string]string{}
+	Subs = map[string]*redis.PubSub{}
 }
 
 // ChatSession represents a connected/active chat user
@@ -35,10 +37,14 @@ func NewChatSession(user string, group string, peer *websocket.Conn) *ChatSessio
 const usernameHasBeenTaken = "username %s is already taken. please retry with a different name"
 const retryMessage = "failed to connect. please try again"
 const welcome = "Welcome %s!"
+const welcomeJSON = `{"Content":"%s", "Channel":"%s", "From":"%s", "Type":"welcome"}`
 const joined = "%s: has joined the chat!"
-const chat = "%s: %s"
+const joinedJSON = `{"Content":"%s", "Channel":"%s", "From":"%s", "Type":"joined"}`
+
+// const chat = "%s: %s"
 const left = "%s: has left the chat!"
-const peerkey = "%s:%d"
+const leftJSON = `{"Content":"%s", "Channel":"%s", "From":"%s", "Type":"left"}`
+const peerkey = "%s:%s:%d"
 
 // Start starts the chat by reading messages sent by the peer and broadcasting the to redis pub-sub channel
 func (s *ChatSession) Start() {
@@ -57,7 +63,7 @@ func (s *ChatSession) Start() {
 		log.Println("Has subcribed -> Ignore")
 	} else {
 		startSubscriber(s.group)
-		Subs[s.group] = "OK"
+		// Subs[s.group] = "OK"
 	}
 
 	usernameTaken, err := CheckUserExists(s.user)
@@ -84,7 +90,7 @@ func (s *ChatSession) Start() {
 		}
 	}
 	t := time.Now().UnixNano()
-	key := fmt.Sprintf(peerkey, s.user, t)
+	key := fmt.Sprintf(peerkey, s.group, s.user, t)
 	//user:time
 	log.Println("peer key--", key)
 	Peers[key] = s.peer
@@ -92,9 +98,13 @@ func (s *ChatSession) Start() {
 	if !ujoined {
 		UserJoinChannel(s.group, s.user)
 	}
-
-	s.notifyPeer(fmt.Sprintf(welcome, s.user))
-	SendToChannel(s.group, fmt.Sprintf(joined, s.user))
+	welcomeMsg := fmt.Sprintf(welcomeJSON, fmt.Sprintf(welcome, s.user), s.group, s.user)
+	// `{"Content":"` + fmt.Sprintf(welcome, s.user) + `", "Channel":"` + s.group + `", "From":"` + s.user + `", "Type":"welcome"}`
+	// s.notifyPeer(fmt.Sprintf(welcome, s.user))
+	s.notifyPeer(welcomeMsg)
+	joinedMsg := fmt.Sprintf(joinedJSON, fmt.Sprintf(joined, s.user), s.group, s.user)
+	// `{"Content":"` + fmt.Sprintf(joined, s.user) + `", "Channel":"` + s.group + `", "From":"` + s.user + `", "Type":"joined"}`
+	SendToChannel(s.group, joinedMsg)
 
 	/*
 		this go-routine will exit when:
@@ -113,7 +123,12 @@ func (s *ChatSession) Start() {
 				}
 				return
 			}
-			SendToChannel(s.group, fmt.Sprintf(chat, s.user, string(msg)))
+			msgChat := getChatMessage(string(msg))
+			msgChat.From = s.user
+			msgChat.Channel = s.group
+			msgChat.Type = "text"
+			data, _ := json.Marshal(msgChat)
+			SendToChannel(s.group, string(data))
 		}
 	}()
 }
@@ -129,9 +144,10 @@ func (s *ChatSession) notifyPeer(msg string) {
 func (s *ChatSession) disconnect() {
 	//remove user from SET
 	RemoveUser(s.user)
-
+	leftMsg := fmt.Sprintf(leftJSON, fmt.Sprintf(left, s.user), s.group, s.user)
+	// `{"Content":"` + fmt.Sprintf(left, s.user) + `", "Channel":"` + s.group + `", "From":"` + s.user + `", "Type":"left"}`
 	//notify other users that this user has left
-	SendToChannel(s.group, fmt.Sprintf(left, s.user))
+	SendToChannel(s.group, leftMsg)
 
 	//close websocket
 	s.peer.Close()
