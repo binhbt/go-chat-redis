@@ -13,10 +13,11 @@ import (
 
 //MessageData nessage data struct
 type MessageData struct {
-	From    string
-	Channel string
-	Content string
-	Type    string
+	From      string
+	Channel   string
+	Content   string
+	Type      string
+	TimeStamp int64
 }
 
 var client *redis.Client

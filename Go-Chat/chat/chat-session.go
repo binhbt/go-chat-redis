@@ -127,6 +127,7 @@ func (s *ChatSession) Start() {
 			msgChat.From = s.user
 			msgChat.Channel = s.group
 			msgChat.Type = "text"
+			msgChat.TimeStamp = time.Now().Unix()
 			data, _ := json.Marshal(msgChat)
 			SendToChannel(s.group, string(data))
 		}
